@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Carrom Disc Pool - Grand Prototype</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@700&display=swap');
+  body, html {
+    margin: 0; padding: 0; overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at center, #c6a359, #6b4e1b);
+    font-family: 'Roboto Slab', serif;
+    user-select: none;
+  }
+  #container {
+    position: relative;
+    width: 720px;
+    height: 720px;
+    background: #deb887;
+    border-radius: 40px;
+    box-shadow: 0 0 60px rgba(75,55,8,0.9);
+    border: 20px solid #4b3e1e;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    margin: auto;
+    background: transparent;
+  }
+  #info, #scores {
+    color: #3a2e0b;
+    font-size: 1.4rem;
+    text-align: center;
+    margin: 15px 0 10px;
+    width: 720px;
+    text-shadow: 0 0 5px #d2be86;
+    user-select: none;
+  }
+  button {
+    cursor: pointer;
+    background: #7a5c00;
+    border: none;
+    border-radius: 30px;
+    color: #ffeda1;
+    font-weight: 700;
+    font-size: 1.3rem;
+    padding: 16px 48px;
+    box-shadow: 0 0 24px #ffe27d;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    user-select: none;
+  }
+  button:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 40px #fff4a1;
+  }
+  #powerBar {
+    position: absolute;
+    bottom: 120px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 340px;
+    height: 22px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 0 10px rgba(0,0,0,0.6);
+    display: none;
+  }
+  #powerFill {
+    height: 100%;
+    background: linear-gradient(90deg, #f39c12, #d35400);
+    width: 0%;
+    transition: width 0.05s ease;
+  }
+  @media (max-width: 780px) {
+    #container, #info, #scores {
+      width: 95vw;
+    }
+    button {
+      width: 90vw;
+      font-size: 1.1rem;
+      padding: 14px 24px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div id="container">
+  <canvas id="canvas" width="720" height="720"></canvas>
+  <div id="powerBar"><div id="powerFill"></div></div>
+</div>
+
+<div id="info">Player 1 (White) - Drag & flick the striker to shoot.</div>
+<div id="scores"></div>
+<button id="resetBtn">Reset Game</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+  const { Engine, Render, Runner, World, Bodies, Body, Events, Vector, Mouse, MouseConstraint } = Matter;
+
+  const engine = Engine.create();
+  const world = engine.world;
+
+  const canvas = document.getElementById('canvas');
+  const container = document.getElementById('container');
+  const powerBar = document.getElementById('powerBar');
+  const powerFill = document.getElementById('powerFill');
+  const infoDiv = document.getElementById('info');
+  const scoresDiv = document.getElementById('scores');
+  const resetBtn = document.getElementById('resetBtn');
+
+  const width = canvas.width;
+  const height = canvas.height;
+  const center = { x: width / 2, y: height /2 };
+  const wallThickness = 50;
+  const pocketRadius = 40;
+  const coinRadius = 18;
+  const strikerRadius = 28;
+
+  const render = Render.create({
+    canvas: canvas,
+    engine: engine,
+    options: {
+      width: width,
+      height: height,
+      wireframes: false,
+      background: 'transparent',
+      pixelRatio: window.devicePixelRatio
+    }
+  });
+  Render.run(render);
+  Runner.run(Runner.create(), engine);
+
+  // Board walls
+  const walls = [
+    Bodies.rectangle(center.x, wallThickness/2, width - 2*wallThickness, wallThickness, { isStatic:true, render:{ fillStyle:'#4b3e1e' }}),
+    Bodies.rectangle(center.x, height - wallThickness/2, width - 2*wallThickness, wallThickness, { isStatic:true, render:{ fillStyle:'#4b3e1e' }}),
+    Bodies.rectangle(wallThickness/2, center.y, wallThickness, height - 2*wallThickness, { isStatic:true, render:{ fillStyle:'#4b3e1e' }}),
+    Bodies.rectangle(width - wallThickness/2, center.y, wallThickness, height - 2*wallThickness, { isStatic:true, render:{ fillStyle:'#4b3e1e' }}),
+  ];
+  World.add(world, walls);
+
+  // Corners pockets
+  const pockets = [
+    Bodies.circle(wallThickness + pocketRadius, wallThickness + pocketRadius, pocketRadius, { isStatic:true, isSensor:true, render:{ fillStyle:'#000' }}),
+    Bodies.circle(width - wallThickness - pocketRadius, wallThickness + pocketRadius, pocketRadius, { isStatic:true, isSensor:true, render:{ fillStyle:'#000' }}),
+    Bodies.circle(wallThickness + pocketRadius, height - wallThickness - pocketRadius, pocketRadius, { isStatic:true, isSensor:true, render:{ fillStyle:'#000' }}),
+    Bodies.circle(width - wallThickness - pocketRadius, height - wallThickness - pocketRadius, pocketRadius, { isStatic:true, isSensor:true, render:{ fillStyle:'#000' }}),
+  ];
+  World.add(world, pockets);
+
+  // Center coin cluster - hexagonal tight packing function
+  function generateCoinPositions(center, radius, spacing) {
+    const positions = [center];
+    let layer = 1;
+    while (positions.length < 19) {
+      const count = layer * 6;
+      for (let i = 0; i < count; i++) {
+        let angle = (Math.PI / 3) * i / layer + layer;
+        let x = center.x + spacing * layer * Math.cos(angle);
+        let y = center.y + spacing * layer * Math.sin(angle);
+        positions.push({x:x, y:y});
+        if (positions.length >= 19) break;
+      }
+      layer++;
+    }
+    return positions;
+  }
+
+  const clusterSpacing = coinRadius * 2 + 1;
+  const clusterPositions = generateCoinPositions(center, coinRadius, clusterSpacing);
+
+  // Create coins with proper coloring (queen red center)
+  const coins = clusterPositions.map((pos, index) => {
+    if(index === 0) {
+      return Bodies.circle(pos.x, pos.y, coinRadius, {
+        restitution: 0.75, frictionAir: 0.01,
+        render: { fillStyle: '#d11', strokeStyle: '#fff', lineWidth: 3 }
+      });
+    }
+    let color = (index % 2) ? '#000' : '#fff';
+    return Bodies.circle(pos.x, pos.y, coinRadius, {
+      restitution: 0.75, frictionAir: 0.015,
+      render: { fillStyle: color, strokeStyle: '#fff', lineWidth: 2 }
+    });
+  });
+  World.add(world, coins);
+
+  // Striker
+  const strikerStart = {x: center.x, y: height - wallThickness - 100};
+  let striker = Bodies.circle(strikerStart.x, strikerStart.y, strikerRadius, {
+    restitution: 0.85, frictionAir: 0.02,
+    render: { fillStyle: '#eee', strokeStyle: '#999', lineWidth: 5 }
+  });
+  World.add(world, striker);
+
+  // Game data and logic variables
+  let currentPlayer = 1; // 1=White, 2=Black
+  let scores = {1:0, 2:0};
+  let fouls = {1:0, 2:0};
+  let queenPocketedBy = null;
+  let queenCovered = false;
+  let turnEnded = false;
+
+  // User input and controls using mouse constraint
+  const mouse = Mouse.create(render.canvas);
+  const mouseConstraint = MouseConstraint.create(engine, {
+    mouse: mouse,
+    constraint: { stiffness: 0.18, render: {visible: false} }
+  });
+  World.add(world, mouseConstraint);
+  render.mouse = mouse;
+
+  mouseConstraint.collisionFilter.mask = 0x0001;
+
+  Events.on(mouseConstraint, 'startdrag', event => {
+    if(event.body !== striker) {
+      mouseConstraint.constraint.bodyB = null;
+    }
+  });
+
+  let dragStart = null;
+  Events.on(mouseConstraint, 'startdrag', e => {
+    if(e.body === striker) {
+      dragStart = { x:e.mouse.position.x, y:e.mouse.position.y };
+      powerFill.style.width = '0%';
+      powerBar.style.display = 'block';
+    }
+  });
+
+  Events.on(mouseConstraint, 'mousemove', e => {
+    if(dragStart) {
+      let dragAmount = Vector.magnitude(Vector.sub(dragStart, e.mouse.position));
+      let powerPercent = Math.min(dragAmount * 1.5, 130);
+      powerFill.style.width = powerPercent + '%';
+    }
+  });
+
+  Events.on(mouseConstraint, 'enddrag', e => {
+    if(e.body === striker && dragStart) {
+      let dragEnd = e.mouse.position;
+      let forceVec = Vector.sub(dragStart, dragEnd);
+      let forceMag = Math.min(Vector.magnitude(forceVec), 130);
+
+      if(forceMag > 7) {
+        Body.setVelocity(striker, {x:0,y:0});
+        Body.applyForce(striker, striker.position, Vector.mult(Vector.normalise(forceVec), 0.00045 * forceMag));
+        turnEnded = false;
+        info(`${getPlayerName()} played a shot.`);
+      } else {
+        info('Shot too weak, drag farther to shoot.');
+      }
+
+      powerFill.style.width = '0%';
+      powerBar.style.display = 'none';
+      dragStart = null;
+    }
+  });
+
+  function getPlayerName() {
+    return currentPlayer === 1 ? 'Player 1 (White)' : 'Player 2 (Black)';
+  }
+
+  Events.on(engine, 'collisionStart', event => {
+    event.pairs.forEach(pair => {
+      pockets.forEach(pocket => {
+        if ((pair.bodyA === pocket && coins.includes(pair.bodyB)) || (pair.bodyB === pocket && coins.includes(pair.bodyA))) {
+          let coin = coins.includes(pair.bodyA) ? pair.bodyA : pair.bodyB;
+          World.remove(world, coin);
+          coins.splice(coins.indexOf(coin), 1);
+
+          if (coin.render.fillStyle === '#d11') {
+            queenPocketedBy = currentPlayer;
+            info(`${getPlayerName()} pocketed the Queen! Cover her to score.`);
+          } else if ((coin.render.fillStyle === '#fff' && currentPlayer === 1) || (coin.render.fillStyle === '#000' && currentPlayer === 2)) {
+            scores[currentPlayer]++;
+            info(`${getPlayerName()} scored! Total: ${scores[currentPlayer]}`);
+          } else {
+            fouls[currentPlayer]++;
+            info(`${getPlayerName()} committed a foul. Total fouls: ${fouls[currentPlayer]}`);
+          }
+          updateScores();
+        }
+      });
+    });
+  });
+
+  if(!powerBar){
+    powerBar = document.createElement('div');
+    powerBar.id = 'powerBar';
+    powerBar.style.position = 'absolute';
+    powerBar.style.bottom = '110px';
+    powerBar.style.left = '50%';
+    powerBar.style.transform = 'translateX(-50%)';
+    powerBar.style.width = '340px';
+    powerBar.style.height = '22px';
+    powerBar.style.background = 'rgba(0,0,0,0.3)';
+    powerBar.style.borderRadius = '12px';
+    powerBar.style.overflow = 'hidden';
+    powerBar.style.display = 'none';
+    powerBar.style.boxShadow = '0 0 10px rgba(0,0,0,0.6)';
+    container.appendChild(powerBar);
+
+    powerFill = document.createElement('div');
+    powerFill.id = 'powerFill';
+    powerFill.style.height = '100%';
+    powerFill.style.background = 'linear-gradient(90deg, #f39c12, #d35400)';
+    powerFill.style.width = '0%';
+    powerFill.style.transition = 'width 0.05s ease';
+    powerBar.appendChild(powerFill);
+  }
+
+  function info(msg){
+    infoDiv.textContent = msg;
+  }
+  function updateScores(){
+    scoresDiv.innerHTML = `
+      Player 1 (White): ${scores[1]}<br/>
+      Player 2 (Black): ${scores[2]}<br/>
+      Queen Pocketed By: ${queenPocketedBy ? getPlayerName() : 'No one'}<br/>
+      Fouls - Player 1: ${fouls[1]}, Player 2: ${fouls[2]}<br/>
+      Current Turn: ${getPlayerName()}
+    `;
+  }
+
+  function isMoving(){
+    if(striker.speed > 0.05) return true;
+    for(const c of coins) if(c.speed > 0.05) return true;
+    return false;
+  }
+
+  (function gameLoop(){
+    requestAnimationFrame(gameLoop);
+    if(!turnEnded && !isMoving()){
+      turnEnded = true;
+      if(queenPocketedBy && !queenCovered){
+        queenCovered = true; // Simplified auto cover
+        info(`${getPlayerName()} covered the Queen!`);
+      }
+      currentPlayer = currentPlayer === 1 ? 2 : 1;
+      info(`${getPlayerName()}'s turn.`);
+      updateScores();
+      Body.setPosition(striker, strikerStart);
+      Body.setVelocity(striker, { x:0, y:0 });
+      Body.setAngularVelocity(striker, 0);
+    }
+  })();
+
+  updateScores();
+  info(`${getPlayerName()} starts! Drag & flick the striker.`);
+
+  resetBtn.onclick = () => location.reload();
+</script>
+
+</body>
+</html>
